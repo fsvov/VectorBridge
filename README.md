@@ -13,7 +13,7 @@
 当前项目口径：
 
 - 已修通文档上传入库、父子分块、hybrid/UBG 检索、图片截图查询、多轮追问和前端 trace 展示。
-- 图片查询是“截图相似检索 + OCR fallback”的最小可用能力，不是通用视觉问答或人脸识别。
+- 图片查询是“截图相似检索 + OCR fallback”的最小可用能力，用于匹配截图来自哪个已入库页面、图表或文本区域；不是通用视觉问答或人脸识别。
 - 本项目不是生产级安全系统；文档级权限、文件扫描、PII 脱敏等作为未来工程化方向。
 
 快速启动：
@@ -68,6 +68,15 @@ cp .env.example .env
 - `JWT_SECRET_KEY`：必须替换为足够长的随机字符串，不要使用示例值。
 - `ADMIN_INVITE_CODE`：用于注册管理员账号，必须替换为私有邀请码；公开仓库中的 `.env.example` 仅提供占位符。
 
+### 首次使用流程
+
+1. 启动依赖服务：`docker compose up -d`。
+2. 安装依赖：`uv sync`。
+3. 复制并编辑环境变量：`cp .env.example .env`。
+4. 启动后端：`uv run uvicorn backend.app:app --host 0.0.0.0 --port 8000 --reload`。
+5. 打开 `http://127.0.0.1:8000/`，使用 `ADMIN_INVITE_CODE` 注册管理员账号。
+6. 上传文档，等待入库完成后开始提问。
+
 ### 4) Docker 部署（数据库 + 缓存 + 向量库）
 当前仓库的 `docker-compose.yml` 同时承载业务依赖与 Milvus 依赖：
 - 业务依赖：`postgres`、`redis`
@@ -118,14 +127,16 @@ uv run uvicorn backend.app:app --host 0.0.0.0 --port 8000 --reload
 - **流式可观测 RAG**：`contextvars` 请求级隔离 + SSE 流式推送，检索、评分、重写等步骤在”思考中”阶段即可前端实时展示，思考→回答同一气泡无缝切换。
 - **查询重写与相关性门控**：Step-Back / HyDE 双策略重写 + 结构化评分门控，低相关检索自动触发二次召回。
 - **BM25 统计持久化与增量同步**：词表、文档频次、全局统计落盘，入库增量添加、删除按文件名从 Milvus 拉取文本后增量扣减，保证向量库与稀疏统计一致。
-- **多模态图片查询**：CLIP 图片 embedding → Milvus image_dense 检索 + OCR fallback，前端 base64 上传后端解码，不依赖外部 VQA API。
+- **多模态图片查询**：CLIP 图片 embedding → Milvus image_dense 检索 + OCR fallback，前端 base64 上传后端解码，不依赖外部 VQA API。当前目标是截图相似匹配和附近文本返回，不做开放域图像问答。
+- **Conformal 盲区检测**：支持用 conformal prediction 标定检索置信度阈值，替代固定经验阈值；在存在校准状态文件且校准集与线上查询分布相近时，可按 α=0.10 解释为 90% 目标覆盖率。该校准作用于检索盲区判断，不保证最终答案一定正确。相关概念源自 [CRANE](https://github.com/fsvov/CRANE) 项目的可信推理方法论。
 
 ## 参考项目与数据集
 
-### 参考 RAG 项目
+### 参考项目
 
 | 项目 | 借鉴内容 |
 |------|---------|
+| [CRANE](https://github.com/fsvov/CRANE) | 多模态可信推理方法论：UBG 门控融合 + Conformal Prediction 校准，从文本-音频情感分析迁移为文本-图片 RAG 检索中的融合与校准思路；两者不共享模型或任务，详见 `docs/rag-architecture.md` |
 | [Rag_System](https://github.com/CliffsCai/Rag_System) | 多模态 RAG 架构参考：图片 base64 传输方案、三路混合检索、Milvus image_dense 字段设计、跨模态查询流程 |
 | [SuperMew](https://github.com/icey1287/SuperMew) | 原始纯文本 RAG 基础，VectorBridge 前身：LangGraph 检索管线、Hybrid Search + RRF、三级分块 + Auto-merging、SSE 流式输出 |
 
@@ -212,6 +223,8 @@ uv run uvicorn backend.app:app --host 0.0.0.0 --port 8000 --reload
 - 鉴权：`JWT_SECRET_KEY`、`ADMIN_INVITE_CODE`、`JWT_ALGORITHM`、`JWT_EXPIRE_MINUTES`
 
 注意：`JWT_SECRET_KEY` 和 `ADMIN_INVITE_CODE` 不能沿用示例值。前者用于签发登录 token，后者控制管理员注册入口。
+
+OCR 说明：只安装 Python 包 `pytesseract` 不等于启用 OCR。若未安装 Tesseract OCR 可执行程序，图片查询仍可走 CLIP 相似检索，但不会有 OCR 文本增强。
 
 ## API 速览
 
