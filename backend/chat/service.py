@@ -499,14 +499,14 @@ def _direct_rag_answer_sync(
     user_text: str,
     query_image_path: str | None = None,
     answer_user_text: str | None = None,
-) -> str:
+) -> tuple[str, dict | None]:
     rag_result = run_rag_graph(user_text, query_image_path=query_image_path)
     docs = rag_result.get("docs", []) if isinstance(rag_result, dict) else []
     rag_trace = rag_result.get("rag_trace", {}) if isinstance(rag_result, dict) else {}
     record_rag_context(rag_trace)
 
     if not docs:
-        return "文档未提供相关信息，无法回答此问题。建议补充相关文档。"
+        return "文档未提供相关信息，无法回答此问题。建议补充相关文档。", rag_trace
 
     context = _format_direct_rag_docs(docs)
     image_evidence = format_image_evidence_for_prompt(rag_trace)
@@ -520,8 +520,8 @@ def _direct_rag_answer_sync(
     response, answer_model = _generate_direct_answer_with_fallback(prompt, prompt_user_text, docs)
     answer = (response.content or "").strip()
     if answer_model is None:
-        return answer
-    return _rewrite_verbatim_answer_if_needed(answer_model, prompt_user_text, answer)
+        return answer, rag_trace
+    return _rewrite_verbatim_answer_if_needed(answer_model, prompt_user_text, answer), rag_trace
 
 
 def _build_context_messages(
@@ -664,11 +664,12 @@ def chat_with_agent(
                     "\u68c0\u6d4b\u5230\u4e0a\u4e0b\u6587\u8ffd\u95ee",
                     f"\u6539\u5199\u68c0\u7d22\u67e5\u8be2: {effective_query}",
                 )
-            response_content = _direct_rag_answer_sync(
+            response_content, rag_trace = _direct_rag_answer_sync(
                 effective_query,
                 query_image_path,
                 answer_user_text=user_text if effective_query != user_text else None,
             )
+            record_rag_context(rag_trace)
             result = AIMessage(content=response_content)
         else:
             try:
@@ -679,11 +680,12 @@ def chat_with_agent(
             except Exception as e:
                 if not _looks_like_json_parser_error(e):
                     raise
-                response_content = _direct_rag_answer_sync(
+                response_content, rag_trace = _direct_rag_answer_sync(
                     effective_query,
                     query_image_path,
                     answer_user_text=user_text if effective_query != user_text else None,
                 )
+                record_rag_context(rag_trace)
                 result = AIMessage(content=response_content)
     finally:
         set_rag_step_queue(None)
@@ -821,13 +823,15 @@ async def chat_with_agent_stream(
                         "\u68c0\u6d4b\u5230\u4e0a\u4e0b\u6587\u8ffd\u95ee",
                         f"\u6539\u5199\u68c0\u7d22\u67e5\u8be2: {effective_query}",
                     )
-                direct_response = await _run_in_executor_with_context(
+                direct_result = await _run_in_executor_with_context(
                     lambda: _direct_rag_answer_sync(
                         effective_query,
                         query_image_path,
                         answer_user_text=user_text if effective_query != user_text else None,
                     ),
                 )
+                direct_response, rag_trace_direct = direct_result if isinstance(direct_result, tuple) else (direct_result, None)
+                record_rag_context(rag_trace_direct)
                 if direct_response:
                     full_response += direct_response
                     await output_queue.put({"type": "content", "content": direct_response})
@@ -861,13 +865,15 @@ async def chat_with_agent_stream(
                 await output_queue.put({"type": "error", "content": str(e)})
                 return
             try:
-                fallback_response = await _run_in_executor_with_context(
+                fallback_result = await _run_in_executor_with_context(
                     lambda: _direct_rag_answer_sync(
                         effective_query,
                         query_image_path,
                         answer_user_text=user_text if effective_query != user_text else None,
                     ),
                 )
+                fallback_response, rag_trace_fallback = fallback_result if isinstance(fallback_result, tuple) else (fallback_result, None)
+                record_rag_context(rag_trace_fallback)
                 if fallback_response:
                     full_response += fallback_response
                     await output_queue.put({"type": "content", "content": fallback_response})
