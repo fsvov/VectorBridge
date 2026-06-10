@@ -300,9 +300,7 @@
                     </div>
 
                     <!-- RAG Trace + Sources -->
-                    <div v-if="!msg.isUser && msg.ragTrace &&
-                         ((msg.ragTrace.retrieved_chunks && msg.ragTrace.retrieved_chunks.length) ||
-                          (msg.ragTrace.image_matches && msg.ragTrace.image_matches.length))" class="message-meta">
+                    <div v-if="!msg.isUser && hasRagTraceDetails(msg.ragTrace)" class="message-meta">
                         <details class="reasoning-details">
                             <summary>
                                 检索详情

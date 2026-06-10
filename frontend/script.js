@@ -138,7 +138,7 @@ createApp({
         scrollToChunk(msgIndex, chunkIndex) {
             const msgEl = document.querySelectorAll('.message')[msgIndex];
             if (!msgEl) return;
-            const details = msgEl.querySelector('details.references-details');
+            const details = msgEl.querySelector('details.reasoning-details');
             if (details) details.open = true;
             const chunkEl = document.getElementById(`chunk-${msgIndex}-${chunkIndex}`);
             if (chunkEl) {
@@ -234,6 +234,13 @@ createApp({
             return trace.recall_count != null
                 || trace.post_merge_candidate_count != null
                 || trace.candidate_count != null;
+        },
+
+        hasRagTraceDetails(trace) {
+            if (!trace || typeof trace !== 'object') {
+                return false;
+            }
+            return Object.keys(trace).length > 0;
         },
 
         authHeaders(extra = {}) {
