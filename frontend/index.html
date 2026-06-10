@@ -1,0 +1,456 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>VectorBridge — 多模态 RAG 检索增强生成系统</title>
+    <link rel="stylesheet" href="style.css">
+    <link rel="stylesheet" href="https://lib.baomitu.com/font-awesome/6.4.0/css/all.min.css">
+    <script src="https://lib.baomitu.com/marked/11.1.1/marked.min.js"></script>
+    <link rel="stylesheet" href="https://lib.baomitu.com/highlight.js/11.7.0/styles/atom-one-dark.min.css">
+    <script src="https://lib.baomitu.com/highlight.js/11.7.0/highlight.min.js"></script>
+    <script src="https://lib.baomitu.com/vue/3.4.21/vue.global.prod.js"></script>
+    <script>
+        window.addEventListener('DOMContentLoaded', function () {
+            if (window.Vue && window.marked && window.hljs) return;
+            document.body.innerHTML = '<div style="max-width:680px;margin:15vh auto;padding:24px;font-family:system-ui,sans-serif;line-height:1.7;color:#e5e7eb;background:#111827;border:1px solid #374151;border-radius:8px;">前端依赖加载失败。请检查网络或将 Vue、marked、highlight.js、Font Awesome 改为本地静态资源后重试。</div>';
+        });
+    </script>
+</head>
+<body>
+<div id="app" class="app-wrapper">
+
+    <!-- ===== Header ===== -->
+    <header class="app-header">
+        <div class="header-left">
+            <span class="header-logo">VectorBridge</span>
+            <button class="btn-secondary theme-toggle-btn" @click="toggleTheme" :title="theme === 'dark' ? '切换亮色' : '切换暗色'">
+                {{ theme === 'dark' ? '☀' : '☾' }}
+            </button>
+        </div>
+
+        <!-- Navigation Pills (authenticated, non-settings) -->
+        <nav v-if="isAuthenticated" class="nav-pills">
+            <button class="nav-pill" :class="{ active: activeNav === 'newChat' }" @click="handleNewChat">
+                对话
+            </button>
+            <button class="nav-pill" :class="{ active: activeNav === 'history' }" @click="handleHistory">
+                历史
+            </button>
+            <button v-if="isAdmin" class="nav-pill" :class="{ active: activeNav === 'settings' }" @click="handleSettings">
+                知识库
+            </button>
+        </nav>
+
+        <div class="header-right" v-if="isAuthenticated">
+            <span class="user-badge">
+                {{ currentUser?.username }}
+                <span class="role-tag">{{ currentUser?.role }}</span>
+            </span>
+            <button class="btn-secondary" @click="handleLogout" style="padding:4px 12px;font-size:12px;">
+                退出
+            </button>
+        </div>
+    </header>
+
+    <!-- ===== Main Content ===== -->
+    <div class="main-content">
+
+        <!-- Auth Panel -->
+        <div v-if="!isAuthenticated" class="auth-panel">
+            <h2>{{ authMode === 'login' ? '登录' : '注册' }}</h2>
+            <p>{{ authMode === 'login' ? '欢迎使用 VectorBridge' : '创建新账户' }}</p>
+            <div class="auth-form" @keydown.enter="handleAuthSubmit">
+                <input v-model="authForm.username" placeholder="用户名" autocomplete="username">
+                <input v-model="authForm.password" type="password" placeholder="密码" autocomplete="current-password">
+                <select v-if="authMode === 'register'" v-model="authForm.role">
+                    <option value="user">普通用户</option>
+                    <option value="admin">管理员</option>
+                </select>
+                <input v-if="authMode === 'register' && authForm.role === 'admin'"
+                       v-model="authForm.admin_code" placeholder="管理员邀请码">
+                <button class="auth-submit" @click="handleAuthSubmit" :disabled="authLoading">
+                    {{ authLoading ? '请稍候...' : (authMode === 'login' ? '登录' : '注册') }}
+                </button>
+                <button class="auth-switch" @click="authMode = authMode === 'login' ? 'register' : 'login'">
+                    {{ authMode === 'login' ? '没有账号？注册' : '已有账号？登录' }}
+                </button>
+            </div>
+        </div>
+
+        <!-- Settings / Knowledge Base Panel -->
+        <div v-if="isAuthenticated && activeNav === 'settings'" class="settings-panel">
+            <div class="settings-header">
+                <h2>知识库管理</h2>
+                <p>上传和管理文档，构建检索知识库</p>
+            </div>
+
+            <div class="upload-section">
+                <h3>上传文档</h3>
+                <div class="upload-area">
+                    <button class="btn-primary" @click="$refs.fileInput.click()">
+                        选择文件
+                    </button>
+                    <input type="file" ref="fileInput" style="display:none"
+                           @change="handleFileSelect"
+                           accept=".pdf,.doc,.docx,.xls,.xlsx,.html,.htm">
+                    <div v-if="selectedFile" class="selected-file">
+                        <i :class="getFileIcon(selectedFile.name)"></i>
+                        <span>{{ selectedFile.name }}</span>
+                        <span style="color:var(--text-muted);font-size:12px;">
+                            {{ (selectedFile.size / 1024).toFixed(1) }} KB
+                        </span>
+                    </div>
+                    <button v-if="selectedFile" class="btn-primary" @click="uploadDocument"
+                            :disabled="isUploading">
+                        {{ isUploading ? '上传中...' : '开始上传' }}
+                    </button>
+
+                    <!-- Upload Progress -->
+                    <div v-if="uploadSteps.length" class="upload-progress"
+                         :class="{ collapsed: uploadProgressCollapsed }">
+                        <div class="upload-progress-header" @click="toggleUploadProgressCollapsed"
+                             style="display:flex;justify-content:space-between;cursor:pointer;">
+                            <div class="upload-message">{{ uploadProgress }}</div>
+                        </div>
+                        <div class="upload-step-list" v-if="!uploadProgressCollapsed">
+                            <div v-for="(step, idx) in uploadSteps" :key="idx" class="upload-step"
+                                 :class="{ 'upload-step-completed': step.status === 'completed',
+                                           'upload-step-failed': step.status === 'failed' }">
+                                <div class="upload-step-header">
+                                    <span class="upload-step-label">{{ step.label }}</span>
+                                    <span class="upload-step-percent">{{ step.percent }}%</span>
+                                </div>
+                                <div class="upload-step-bar">
+                                    <div class="upload-step-fill" :style="{ width: step.percent + '%' }"></div>
+                                </div>
+                                <div v-if="step.message" class="upload-step-message" style="font-size:11px;color:var(--text-muted);">
+                                    {{ step.message }}
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <div class="documents-section">
+                <h3>已入库文档</h3>
+                <div v-if="!documents.length && !documentsLoading" class="empty-documents">暂无文档</div>
+                <div v-else>
+                    <div class="doc-toolbar">
+                        <input v-model="docSearch" @input="docPage=1" placeholder="搜索文档名..." class="doc-search-input">
+                        <span class="doc-count">{{ filteredDocuments.length }} 篇</span>
+                    </div>
+                    <div v-if="documentsLoading" class="loading-indicator">加载中...</div>
+                    <div v-else class="documents-list">
+                        <div v-for="doc in paginatedDocuments" :key="doc.filename" class="document-item"
+                         :class="{ deleting: isDeletingDocument(doc.filename) }">
+                        <div class="document-info">
+                            <span class="document-icon"><i :class="getFileIcon(doc.filename)"></i></span>
+                            <div style="flex:1;min-width:0;">
+                                <div class="document-name">{{ doc.filename }}</div>
+                                <div class="document-meta">
+                                    <span>{{ doc.file_type || 'N/A' }}</span>
+                                    <span>{{ doc.chunk_count || 0 }} 分块</span>
+                                </div>
+                            </div>
+                        </div>
+
+                        <!-- Delete Progress -->
+                        <div v-if="isDeletingDocument(doc.filename) && deleteJobs[doc.filename]" style="flex:1;margin:0 12px;">
+                            <div class="upload-progress delete-progress"
+                                 :class="{ collapsed: deleteJobs[doc.filename].collapsed }">
+                                <div class="upload-progress-header"
+                                     @click="toggleDeleteJobCollapsed(doc.filename)"
+                                     style="display:flex;justify-content:space-between;cursor:pointer;">
+                                    <div class="upload-message" style="font-size:12px;">
+                                        {{ deleteJobs[doc.filename].message || '删除中' }}
+                                    </div>
+                                </div>
+                                <div class="upload-step-list" v-if="!deleteJobs[doc.filename].collapsed">
+                                    <div v-for="(step, idx) in (deleteJobs[doc.filename].steps || [])"
+                                         :key="idx" class="upload-step"
+                                         :class="{ 'upload-step-completed': step.status === 'completed',
+                                                   'upload-step-failed': step.status === 'failed' }">
+                                        <div class="upload-step-header">
+                                            <span class="upload-step-label">{{ step.label }}</span>
+                                            <span class="upload-step-percent">{{ step.percent }}%</span>
+                                        </div>
+                                        <div class="upload-step-bar">
+                                            <div class="upload-step-fill" :style="{ width: step.percent + '%' }"></div>
+                                        </div>
+                                    </div>
+                                </div>
+                            </div>
+                        </div>
+
+                        <button class="btn-danger"
+                                :disabled="isDeleteActionLocked(doc.filename)"
+                                @click="deleteDocument(doc.filename)">
+                            {{ isDeletingDocument(doc.filename) ? '删除中' : '删除' }}
+                        </button>
+                    </div>
+                </div>
+                <div v-if="docTotalPages > 1" class="doc-pagination">
+                    <button @click="docPage=1" :disabled="docPage===1" title="首页">«</button>
+                    <button @click="docPage=Math.max(1,docPage-1)" :disabled="docPage===1">‹</button>
+                    <span class="doc-page-info">{{ docPage }} / {{ docTotalPages }}</span>
+                    <button @click="docPage=Math.min(docTotalPages,docPage+1)" :disabled="docPage===docTotalPages">›</button>
+                    <button @click="docPage=docTotalPages" :disabled="docPage===docTotalPages" title="末页">»</button>
+                </div>
+            </div>
+            </div>
+        </div>
+
+        <!-- History Sidebar -->
+        <div v-if="isAuthenticated && showHistorySidebar" class="history-sidebar">
+            <div class="history-header">
+                <h3>对话历史</h3>
+                <button class="close-btn" @click="showHistorySidebar = false">&times;</button>
+            </div>
+            <div class="history-list" v-if="sessions.length">
+                <div v-for="session in sessions" :key="session.session_id"
+                     class="history-item"
+                     :class="{ active: session.session_id === sessionId }"
+                     @click="loadSession(session.session_id)">
+                    <div class="session-info" style="flex:1;">
+                        <div class="session-title">{{ session.title || session.session_id }}</div>
+                        <div class="session-meta">
+                            <span>{{ session.message_count || 0 }} 条</span>
+                            <span>{{ session.updated_at ? session.updated_at.slice(0,10) : '' }}</span>
+                        </div>
+                    </div>
+                    <button class="history-delete-btn"
+                            @click.stop="deleteSession(session.session_id)"
+                            aria-label="删除会话"
+                            title="删除会话">
+                        <i class="fa-solid fa-trash"></i>
+                        <span>删除</span>
+                    </button>
+                </div>
+            </div>
+            <div v-else class="empty-history">暂无对话记录</div>
+        </div>
+
+        <!-- ===== Chat Area ===== -->
+        <div v-show="isAuthenticated && activeNav !== 'settings'" class="chat-area">
+            <div class="chat-container" ref="chatContainer">
+                <div v-if="messages.length === 0" class="welcome-screen">
+                    <h3>VectorBridge</h3>
+                    <p>基于 RAG 检索增强生成，支持多文档检索与实时推理展示</p>
+                </div>
+
+                <div v-for="(msg, index) in messages" :key="index"
+                     class="message"
+                     :class="{ 'bot-message': !msg.isUser, 'user-message': msg.isUser }">
+
+                    <!-- Thinking Bubble -->
+                    <div v-if="!msg.isUser && msg.isThinking && !msg.text" class="message-content thinking-content">
+                        <div class="thinking-header">
+                            <div class="thinking-dots">
+                                <div class="tdot"></div>
+                                <div class="tdot"></div>
+                                <div class="tdot"></div>
+                            </div>
+                            <span class="thinking-text">{{ msg.ragSteps && msg.ragSteps.length ?
+                                msg.ragSteps[msg.ragSteps.length-1].label : '思考中...' }}</span>
+                        </div>
+                        <div v-if="msg._groupedSteps && msg._groupedSteps.length" class="thinking-trace-lines">
+                            <template v-for="(grp, gIdx) in msg._groupedSteps" :key="gIdx">
+                                <div v-if="grp.group" class="step-group">
+                                    <div class="step-group-header" @click="toggleStepGroup(index, gIdx)">
+                                        <span class="step-group-arrow"
+                                              :class="{ collapsed: grp.collapsed }">▶</span>
+                                        <span class="step-group-label">{{ grp.label }}</span>
+                                        <span class="step-group-count">{{ grp.steps.length }}</span>
+                                    </div>
+                                    <div v-if="!grp.collapsed" class="step-group-body">
+                                        <div v-for="(step, sIdx) in grp.steps" :key="sIdx" class="thinking-trace-line">
+                                            <span class="thinking-trace-icon">{{ step.icon }}</span>
+                                            <span class="thinking-trace-label">{{ step.label }}</span>
+                                            <span v-if="step.detail" class="thinking-trace-detail">
+                                                {{ step.detail }}
+                                            </span>
+                                        </div>
+                                    </div>
+                                </div>
+                                <div v-else>
+                                    <div v-for="(step, sIdx) in grp.steps" :key="sIdx" class="thinking-trace-line">
+                                        <span class="thinking-trace-icon">{{ step.icon }}</span>
+                                        <span class="thinking-trace-label">{{ step.label }}</span>
+                                        <span v-if="step.detail" class="thinking-trace-detail">
+                                            {{ step.detail }}
+                                        </span>
+                                    </div>
+                                </div>
+                            </template>
+                        </div>
+                    </div>
+
+                    <!-- Regular Message -->
+                    <div v-else class="message-content">
+                        <div v-if="msg.isUser && msg.imageUrl" class="message-image-attachment">
+                            <img :src="msg.imageUrl" :alt="msg.imageName || 'uploaded image'">
+                            <div class="message-image-caption">
+                                <i class="fa-solid fa-image"></i>
+                                {{ msg.imageName || '已附带图片' }}
+                            </div>
+                        </div>
+                        <div v-html="parseMarkdown(msg.text || '', index)"></div>
+                    </div>
+
+                    <!-- RAG Trace + Sources -->
+                    <div v-if="!msg.isUser && msg.ragTrace &&
+                         ((msg.ragTrace.retrieved_chunks && msg.ragTrace.retrieved_chunks.length) ||
+                          (msg.ragTrace.image_matches && msg.ragTrace.image_matches.length))" class="message-meta">
+                        <details class="reasoning-details">
+                            <summary>
+                                检索详情
+                                ({{ (msg.ragTrace.retrieved_chunks || []).length }} 片段
+                                <span v-if="msg.ragTrace.complexity">· {{ msg.ragTrace.complexity }}</span>)
+                            </summary>
+                            <div class="reasoning-content">
+                                <div class="trace-line" style="margin-bottom:8px;">
+                                    <span class="trace-funnel">
+                                        {{ formatCandidateKLabel(msg.ragTrace) }}
+                                    </span>
+                                </div>
+                                <div v-if="msg.ragTrace.grade_score" class="trace-line">
+                                    相关性评分: {{ formatGradeScore(msg.ragTrace) }}
+                                    <span v-if="msg.ragTrace.rewrite_needed">→ 已重写查询</span>
+                                </div>
+                                <div v-if="msg.ragTrace.rewrite_strategy" class="trace-line">
+                                    重写策略: {{ msg.ragTrace.rewrite_strategy }}
+                                    <span v-if="msg.ragTrace.rewrite_query" class="trace-detail">
+                                        ({{ msg.ragTrace.rewrite_query.slice(0,80) }})
+                                    </span>
+                                </div>
+                                <div v-if="msg.ragTrace.hallucination" class="trace-line">
+                                    幻觉检测: {{ msg.ragTrace.hallucination.verdict }}
+                                </div>
+                                <div v-if="msg.ragTrace.conflict_info && msg.ragTrace.conflict_info.has_conflict"
+                                     class="trace-line" style="color:var(--warning);">
+                                    文档冲突: {{ msg.ragTrace.conflict_info.conflict_detail }}
+                                </div>
+                                <div v-if="msg.ragTrace.has_query_image" class="trace-line">
+                                    图片检索:
+                                    <span v-if="msg.ragTrace.image_context_fallback">
+                                        使用相似截图上下文
+                                    </span>
+                                    <span v-else-if="msg.ragTrace.image_retrieval_enabled">
+                                        已启用
+                                    </span>
+                                    <span v-else>
+                                        未启用
+                                    </span>
+                                    <span class="trace-detail">
+                                        阈值 {{ msg.ragTrace.image_retrieval_min_score ?? '-' }}
+                                        <span v-if="msg.ragTrace.image_retrieval_fallback_min_score">
+                                            / 兜底 {{ msg.ragTrace.image_retrieval_fallback_min_score }}
+                                        </span>
+                                    </span>
+                                </div>
+                                <div v-if="msg.ragTrace.has_query_image && msg.ragTrace.query_image_ocr_enabled"
+                                     class="trace-line">
+                                    OCR:
+                                    <span v-if="msg.ragTrace.query_image_ocr_text">
+                                        {{ msg.ragTrace.query_image_ocr_text.slice(0, 120) }}
+                                    </span>
+                                    <span v-else-if="msg.ragTrace.query_image_ocr_error">
+                                        不可用: {{ msg.ragTrace.query_image_ocr_error }}
+                                    </span>
+                                    <span v-else>
+                                        未提取到文字
+                                    </span>
+                                </div>
+
+                                <div class="sources"
+                                     v-if="msg.ragTrace.image_matches && msg.ragTrace.image_matches.length">
+                                    <div class="sources-title">图片相似候选</div>
+                                    <ul class="sources-list">
+                                        <li v-for="(match, mIdx) in msg.ragTrace.image_matches"
+                                            :key="'img-' + mIdx" class="source-item">
+                                            <div class="source-title-line">
+                                                <span class="source-file">{{ match.filename }}</span>
+                                                <span class="source-page">p{{ match.page_number }}</span>
+                                                <span v-if="match.image_kind" class="source-page">{{ match.image_kind }}</span>
+                                                <span class="source-score">
+                                                    {{ Number(match.image_score ?? match.score ?? 0).toFixed(3) }}
+                                                </span>
+                                            </div>
+                                            <div class="source-excerpt">{{ (match.text || '').slice(0, 220) }}</div>
+                                        </li>
+                                    </ul>
+                                </div>
+
+                                <!-- Sources -->
+                                <div class="sources" v-if="msg.ragTrace.retrieved_chunks && msg.ragTrace.retrieved_chunks.length">
+                                    <div class="sources-title">来源片段</div>
+                                    <ul class="sources-list">
+                                        <li v-for="(chunk, cIdx) in msg.ragTrace.retrieved_chunks"
+                                            :key="cIdx" class="source-item"
+                                            :id="'chunk-' + index + '-' + (cIdx + 1)">
+                                            <div class="source-title-line">
+                                                <span class="source-file">{{ chunk.filename }}</span>
+                                                <span class="source-page">p{{ chunk.page_number }}</span>
+                                                <span v-if="chunk.rerank_score" class="source-score" :class="{ 'score-high': chunk.rerank_score > 0.7, 'score-mid': chunk.rerank_score <= 0.7 && chunk.rerank_score > 0.3, 'score-low': chunk.rerank_score <= 0.3 }">
+                                                    {{ chunk.rerank_score.toFixed(3) }}
+                                                </span>
+                                                <span v-else-if="chunk.score" class="source-score" :class="{ 'score-high': chunk.score > 0.7, 'score-mid': chunk.score <= 0.7 && chunk.score > 0.3, 'score-low': chunk.score <= 0.3 }">
+                                                    {{ chunk.score.toFixed(3) }}
+                                                </span>
+                                            </div>
+                                            <div class="source-excerpt">{{ (chunk.text || '').slice(0, 200) }}</div>
+                                        </li>
+                                    </ul>
+                                </div>
+                            </div>
+                        </details>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Input Area -->
+            <div class="input-area-wrapper">
+                <div class="input-area">
+                    <textarea
+                        ref="textarea"
+                        v-model="userInput"
+                        @keydown="handleKeyDown"
+                        @compositionstart="handleCompositionStart"
+                        @compositionend="handleCompositionEnd"
+                        @input="autoResize"
+                        placeholder="输入问题... 可附带图片"
+                        :disabled="isLoading"
+                        rows="1"
+                    ></textarea>
+                    <label v-if="!isLoading" class="image-upload-btn" title="上传图片查询">
+                        <i class="fa-solid fa-image"></i>
+                        <span>图片</span>
+                        <input type="file" accept="image/*" style="display:none"
+                               @change="handleImageSelect" ref="imageInput">
+                    </label>
+                    <span v-if="selectedImage" class="image-preview-tag">
+                        <i class="fa-solid fa-image"></i> 已选
+                        <button @click="clearImage" class="image-clear-btn">&times;</button>
+                    </span>
+                    <button v-if="isLoading" class="stop-btn" @click="handleStop"
+                            title="停止生成">
+                        <i class="fa-solid fa-stop"></i>
+                    </button>
+                    <button v-else class="send-btn" @click="handleSend"
+                            :disabled="!userInput.trim()"
+                            title="发送">
+                        <i class="fa-solid fa-arrow-up"></i>
+                    </button>
+                </div>
+                <div class="footer-text">基于 RAG 检索增强生成 · 支持多文档检索与实时推理</div>
+            </div>
+        </div>
+
+    </div>
+</div>
+
+<script src="script.js"></script>
+</body>
+</html>

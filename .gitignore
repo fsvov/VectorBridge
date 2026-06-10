@@ -1,0 +1,36 @@
+# Python-generated files
+__pycache__/
+*.py[oc]
+build/
+dist/
+wheels/
+*.egg-info
+
+# Virtual environments
+.venv
+.env    
+
+#docker files
+volumes/
+
+# OS files
+.DS_Store
+data/
+.worktrees/
+
+# test
+tests/
+
+# project-local config & state
+.omc/
+reports/
+CLAUDE.md
+
+# eval scripts (run locally, not part of library)
+scripts/eval_answer_quality.py
+scripts/eval_comprehensive.py
+
+# manual eval templates and records (local use only)
+docs/eval-template*.md
+docs/eval.txt
+docs/multimodal-conformal-narrative.md
