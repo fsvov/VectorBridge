@@ -16,6 +16,45 @@
 - 图片查询是“截图相似检索 + OCR fallback”的最小可用能力，用于匹配截图来自哪个已入库页面、图表或文本区域；不是通用视觉问答或人脸识别。
 - 本项目不是生产级安全系统；文档级权限、文件扫描、PII 脱敏等作为未来工程化方向。
 
+## 运行效果
+
+### 对话生成与 RAG Trace
+
+![对话生成与检索详情](image/chat-trace.png)
+
+### 文档上传与入库进度
+
+![文档上传与向量化入库](image/document-upload.png)
+
+### 图片截图检索
+
+![图片截图检索回答](image/image-retrieval.png)
+
+## 系统链路
+
+```mermaid
+flowchart LR
+    User[User] --> Frontend[Vue Frontend]
+    Frontend --> API[FastAPI /chat/stream]
+    API --> Route{Direct RAG or Tool}
+    Route --> RAG[LangGraph RAG Pipeline]
+    Route --> Agent[Optional Agent Tools]
+
+    RAG --> Dense[Dense: bge-m3]
+    RAG --> Sparse[Sparse: BM25]
+    RAG --> Image[Image: CLIP + OCR]
+
+    Dense --> Fusion[UBG / RRF Fusion]
+    Sparse --> Fusion
+    Image --> Fusion
+
+    Fusion --> Merge[Leaf Recall + Auto-merging]
+    Merge --> Blindspot[Conformal / Fixed Threshold]
+    Blindspot --> Answer[LLM Answer Generation]
+    Answer --> Trace[SSE Content + RAG Trace]
+    Trace --> Frontend
+```
+
 快速启动：
 
 ```bash

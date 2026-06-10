@@ -1,6 +1,7 @@
 import os
 
 from fastapi import APIRouter, BackgroundTasks, Depends, File, HTTPException, UploadFile
+from sqlalchemy import func
 
 from backend.api.resources import (
     UPLOAD_DIR,
@@ -15,7 +16,8 @@ from backend.api.resources import (
     sanitize_upload_filename,
     save_upload_file,
 )
-from backend.db.models import User
+from backend.db.models import ParentChunk, User
+from backend.infra.database import SessionLocal
 from backend.infra.auth import require_admin
 from backend.jobs import DELETE_STEPS, delete_job_manager, upload_job_manager
 from backend.schemas import (
@@ -32,8 +34,69 @@ from backend.schemas import (
 router = APIRouter(tags=["documents"])
 
 
+def _list_documents_from_storage() -> list[DocumentInfo]:
+    """List documents from PostgreSQL, with Milvus legacy data as fallback.
+
+    Current upload paths write parent chunks to PostgreSQL and roll them back if
+    vector indexing fails, so PostgreSQL is the reliable source for uploaded PDF
+    management. Older evaluation ingests may only have Milvus leaf chunks, so we
+    merge a bounded Milvus scan for backward compatibility.
+    """
+    documents_by_name: dict[str, DocumentInfo] = {}
+    with SessionLocal() as db:
+        rows = (
+            db.query(
+                ParentChunk.filename,
+                ParentChunk.file_type,
+                func.count(ParentChunk.chunk_id).label("chunk_count"),
+                func.max(ParentChunk.updated_at).label("uploaded_at"),
+            )
+            .group_by(ParentChunk.filename, ParentChunk.file_type)
+            .order_by(func.max(ParentChunk.updated_at).desc(), ParentChunk.filename.asc())
+            .all()
+        )
+
+    for row in rows:
+        if not row.filename:
+            continue
+        documents_by_name[row.filename] = DocumentInfo(
+            filename=row.filename,
+            file_type=row.file_type or "",
+            chunk_count=int(row.chunk_count or 0),
+            uploaded_at=row.uploaded_at.isoformat() if row.uploaded_at else None,
+        )
+
+    try:
+        milvus_manager.init_collection()
+        legacy_rows = milvus_manager.query(output_fields=["filename", "file_type"], limit=10000)
+    except Exception:
+        legacy_rows = []
+
+    legacy_stats: dict[str, dict] = {}
+    for item in legacy_rows:
+        filename = item.get("filename", "")
+        if not filename or filename in documents_by_name:
+            continue
+        if filename not in legacy_stats:
+            legacy_stats[filename] = {
+                "filename": filename,
+                "file_type": item.get("file_type", ""),
+                "chunk_count": 0,
+            }
+        legacy_stats[filename]["chunk_count"] += 1
+
+    for filename, stats in legacy_stats.items():
+        documents_by_name[filename] = DocumentInfo(**stats)
+
+    return sorted(
+        documents_by_name.values(),
+        key=lambda doc: (doc.uploaded_at is None, doc.uploaded_at or "", doc.filename),
+    )
+
+
 def _process_upload_job(job_id: str, file_path: str, filename: str) -> None:
     failed_step = "cleanup"
+    parent_rows_written = False
     try:
         upload_job_manager.complete_step(job_id, "upload", "文件已保存到服务器")
 
@@ -74,6 +137,7 @@ def _process_upload_job(job_id: str, file_path: str, filename: str) -> None:
         failed_step = "parent_store"
         upload_job_manager.update_step(job_id, "parent_store", 20, "running", "正在写入父级分块")
         parent_chunk_store.upsert_documents(parent_docs)
+        parent_rows_written = True
         upload_job_manager.complete_step(job_id, "parent_store", f"父级分块已入库：{len(parent_docs)} 个")
 
         failed_step = "vector_store"
@@ -104,6 +168,11 @@ def _process_upload_job(job_id: str, file_path: str, filename: str) -> None:
         upload_job_manager.complete_step(job_id, "vector_store", f"向量化入库完成：{total_leaf} 个叶子分块")
         upload_job_manager.complete_job(job_id, f"成功上传并处理 {filename}")
     except Exception as e:
+        if parent_rows_written:
+            try:
+                parent_chunk_store.delete_by_filename(filename)
+            except Exception:
+                pass
         upload_job_manager.fail_job(job_id, failed_step, str(e))
 
 
@@ -140,26 +209,7 @@ def _process_delete_job(job_id: str, filename: str) -> None:
 @router.get("/documents", response_model=DocumentListResponse)
 async def list_documents(_: User = Depends(require_admin)):
     try:
-        milvus_manager.init_collection()
-        results = milvus_manager.query(
-            output_fields=["filename", "file_type"],
-            limit=10000,
-        )
-
-        file_stats = {}
-        for item in results:
-            filename = item.get("filename", "")
-            file_type = item.get("file_type", "")
-            if filename not in file_stats:
-                file_stats[filename] = {
-                    "filename": filename,
-                    "file_type": file_type,
-                    "chunk_count": 0,
-                }
-            file_stats[filename]["chunk_count"] += 1
-
-        documents = [DocumentInfo(**stats) for stats in file_stats.values()]
-        return DocumentListResponse(documents=documents)
+        return DocumentListResponse(documents=_list_documents_from_storage())
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"获取文档列表失败: {str(e)}")
 
@@ -249,6 +299,8 @@ async def get_delete_job(job_id: str, _: User = Depends(require_admin)):
 
 @router.post("/documents/upload", response_model=DocumentUploadResponse)
 async def upload_document(file: UploadFile = File(...), _: User = Depends(require_admin)):
+    filename = ""
+    parent_rows_written = False
     try:
         try:
             filename = sanitize_upload_filename(file.filename or "")
@@ -293,6 +345,7 @@ async def upload_document(file: UploadFile = File(...), _: User = Depends(requir
             raise HTTPException(status_code=500, detail="文档处理失败，未生成可检索叶子分块")
 
         parent_chunk_store.upsert_documents(parent_docs)
+        parent_rows_written = True
         milvus_writer.write_documents(leaf_docs)
 
         return DocumentUploadResponse(
@@ -304,8 +357,18 @@ async def upload_document(file: UploadFile = File(...), _: User = Depends(requir
             ),
         )
     except HTTPException:
+        if parent_rows_written:
+            try:
+                parent_chunk_store.delete_by_filename(filename)
+            except Exception:
+                pass
         raise
     except Exception as e:
+        if parent_rows_written:
+            try:
+                parent_chunk_store.delete_by_filename(filename)
+            except Exception:
+                pass
         raise HTTPException(status_code=500, detail=f"文档上传失败: {str(e)}")
 
 
