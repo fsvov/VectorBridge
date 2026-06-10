@@ -233,6 +233,7 @@ uv run uvicorn backend.app:app --host 0.0.0.0 --port 8000 --reload
 3. `document_loader.py` 执行三级滑动窗口分块并写入层级元数据。
 4. L1/L2 父级分块写入 `parent_chunk_store.py`（DocStore）。
 5. L3 叶子分块在 `milvus_writer` 中执行 BM25 increment_add，再经 `embedding.py` 生成 Dense 与 Sparse 向量并写入 Milvus。
+6. 文档管理列表以 PostgreSQL `parent_chunks` 聚合为主，兼容历史 Milvus-only 评估数据；避免 Milvus query 窗口限制导致新上传文档在列表中漏显示。
 
 ### 4) 会话记忆链路
 1. 每轮问答按当前登录用户 + session_id 写入 PostgreSQL。

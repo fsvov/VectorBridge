@@ -63,6 +63,17 @@ UploadFile
 - `data/images/`：PDF 提取图片。
 - `data/query_images/`：用户查询图片临时文件。
 
+**文档列表一致性**：
+
+文档管理列表不直接全量扫描 Milvus。Milvus 的 query 窗口存在上限，且同一文档可能因为图片向量产生多条 leaf 记录；当 collection 中向量行数较多时，只扫描固定窗口会漏掉新上传文档。
+
+当前实现采用混合策略：
+
+1. **主来源**：从 PostgreSQL `parent_chunks` 按 `filename` / `file_type` 聚合，用于展示通过网页上传的文档。
+2. **检索来源**：Milvus 仍是 L3 叶子向量和 `image_dense` 的检索库，不承担文档列表的主聚合职责。
+3. **失败回滚**：上传流程在父块写入后若向量化入库失败，会删除该文件的父块记录，避免列表显示不可检索文档。
+4. **历史兼容**：早期 CRUD_RAG / RAGEval 评估导入数据可能只存在于 Milvus leaf chunks，没有对应 `parent_chunks`；列表接口保留 bounded Milvus fallback，用于兼容这些 legacy 数据。
+
 ## 4. 检索架构
 
 ```text
