@@ -134,11 +134,11 @@ uv run uvicorn backend.app:app --host 0.0.0.0 --port 8000 --reload
 
 ### 参考项目
 
-| 项目 | 借鉴内容 |
-|------|---------|
-| [CRANE](https://github.com/fsvov/CRANE) | 多模态可信推理方法论：UBG 门控融合 + Conformal Prediction 校准，从文本-音频情感分析迁移为文本-图片 RAG 检索中的融合与校准思路；两者不共享模型或任务，详见 `docs/rag-architecture.md` |
-| [Rag_System](https://github.com/CliffsCai/Rag_System) | 多模态 RAG 架构参考：图片 base64 传输方案、三路混合检索、Milvus image_dense 字段设计、跨模态查询流程 |
-| [SuperMew](https://github.com/icey1287/SuperMew) | 原始纯文本 RAG 基础，VectorBridge 前身：LangGraph 检索管线、Hybrid Search + RRF、三级分块 + Auto-merging、SSE 流式输出 |
+| 项目 | 借鉴内容                                                                                                                                                |
+|------|-----------------------------------------------------------------------------------------------------------------------------------------------------|
+| [CRANE](https://github.com/fsvov/CRANE) | 多模态可信推理方法论：UBG 门控融合 + Conformal Prediction 校准，从文本-音频情感分析迁移为文本-图片 RAG 检索中的融合与校准思路；两者不共享模型或任务，详见 [docs/rag-architecture.md](docs/rag-architecture.md) |
+| [Rag_System](https://github.com/CliffsCai/Rag_System) | 多模态 RAG 架构参考：图片 base64 传输方案、三路混合检索、Milvus image_dense 字段设计、跨模态查询流程                                                                                  |
+| [SuperMew](https://github.com/icey1287/SuperMew) | 原始纯文本 RAG 基础，VectorBridge 前身：LangGraph 检索管线、Hybrid Search + RRF、三级分块 + Auto-merging、SSE 流式输出                                                        |
 
 ### 评估数据集
 
