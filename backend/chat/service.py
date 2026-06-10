@@ -25,6 +25,7 @@ storage = ConversationStorage()
 CONTEXT_WINDOW_MESSAGES = 6
 DIRECT_RAG_ANSWER_TIMEOUT = float(os.getenv("DIRECT_RAG_ANSWER_TIMEOUT", "90"))
 DIRECT_RAG_REWRITE_TIMEOUT = float(os.getenv("DIRECT_RAG_REWRITE_TIMEOUT", "30"))
+DIRECT_RAG_VERIFY_TIMEOUT = float(os.getenv("DIRECT_RAG_VERIFY_TIMEOUT", "8"))
 DIRECT_RAG_ANSWER_MODEL = os.getenv("DIRECT_RAG_ANSWER_MODEL", "fast").strip().lower()
 _WEATHER_KEYWORDS = (
     "天气",
@@ -438,6 +439,29 @@ def _invoke_model_with_timeout(model, messages: list, timeout_seconds: float):
         executor.shutdown(wait=False, cancel_futures=True)
 
 
+def _verify_answer_against_docs_with_timeout(answer: str, docs_text: str) -> dict:
+    if not answer or not docs_text:
+        return {"verdict": "supported", "unsupported_claims": ""}
+
+    executor = concurrent.futures.ThreadPoolExecutor(max_workers=1)
+    future = executor.submit(verify_answer_against_docs, answer, docs_text)
+    try:
+        return future.result(timeout=DIRECT_RAG_VERIFY_TIMEOUT)
+    except concurrent.futures.TimeoutError:
+        future.cancel()
+        return {
+            "verdict": "unknown",
+            "unsupported_claims": f"verification timed out after {DIRECT_RAG_VERIFY_TIMEOUT:.0f}s",
+        }
+    except Exception as exc:
+        return {
+            "verdict": "unknown",
+            "unsupported_claims": str(exc)[:200],
+        }
+    finally:
+        executor.shutdown(wait=False, cancel_futures=True)
+
+
 async def _run_in_executor_with_context(func):
     loop = asyncio.get_running_loop()
     ctx = contextvars.copy_context()
@@ -716,7 +740,7 @@ def chat_with_agent(
         docs_text_for_verify = "\n\n".join(
             c.get("text", "") for c in rag_trace.get("retrieved_chunks", [])
         )
-        hallucination_info = verify_answer_against_docs(response_content, docs_text_for_verify)
+        hallucination_info = _verify_answer_against_docs_with_timeout(response_content, docs_text_for_verify)
 
     if rag_trace:
         rag_trace["hallucination"] = hallucination_info
@@ -801,11 +825,12 @@ async def chat_with_agent_stream(
         title_task.add_done_callback(_on_title_done)
 
     full_response = ""
+    rag_trace_for_stream: dict | None = None
     use_agent_tools = _should_use_agent_tools(user_text, query_image_path)
     rewrite_previous = _is_rewrite_previous_answer_request(user_text)
 
     async def _agent_worker():
-        nonlocal full_response
+        nonlocal full_response, rag_trace_for_stream
         try:
             if rewrite_previous:
                 rewritten = await _run_in_executor_with_context(
@@ -832,6 +857,8 @@ async def chat_with_agent_stream(
                 )
                 direct_response, rag_trace_direct = direct_result if isinstance(direct_result, tuple) else (direct_result, None)
                 record_rag_context(rag_trace_direct)
+                if rag_trace_direct:
+                    rag_trace_for_stream = rag_trace_direct
                 if direct_response:
                     full_response += direct_response
                     await output_queue.put({"type": "content", "content": direct_response})
@@ -860,6 +887,10 @@ async def chat_with_agent_stream(
                 if content:
                     full_response += content
                     await output_queue.put({"type": "content", "content": content})
+            if rag_trace_for_stream is None:
+                worker_rag_context = get_last_rag_context(clear=False)
+                if worker_rag_context:
+                    rag_trace_for_stream = worker_rag_context.get("rag_trace")
         except Exception as e:
             if not _looks_like_json_parser_error(e) or full_response:
                 await output_queue.put({"type": "error", "content": str(e)})
@@ -874,6 +905,8 @@ async def chat_with_agent_stream(
                 )
                 fallback_response, rag_trace_fallback = fallback_result if isinstance(fallback_result, tuple) else (fallback_result, None)
                 record_rag_context(rag_trace_fallback)
+                if rag_trace_fallback:
+                    rag_trace_for_stream = rag_trace_fallback
                 if fallback_response:
                     full_response += fallback_response
                     await output_queue.put({"type": "content", "content": fallback_response})
@@ -904,7 +937,7 @@ async def chat_with_agent_stream(
             agent_task.cancel()
 
     rag_context = get_last_rag_context(clear=True)
-    rag_trace = rag_context.get("rag_trace") if rag_context else None
+    rag_trace = rag_trace_for_stream or (rag_context.get("rag_trace") if rag_context else None)
 
     # 幻觉检测
     hallucination_info = {"verdict": "supported", "unsupported_claims": ""}
@@ -912,7 +945,7 @@ async def chat_with_agent_stream(
         docs_text_for_verify = "\n\n".join(
             c.get("text", "") for c in rag_trace.get("retrieved_chunks", [])
         )
-        hallucination_info = verify_answer_against_docs(full_response, docs_text_for_verify)
+        hallucination_info = _verify_answer_against_docs_with_timeout(full_response, docs_text_for_verify)
 
     if rag_trace:
         rag_trace["hallucination"] = hallucination_info
