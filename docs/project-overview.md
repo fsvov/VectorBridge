@@ -1,6 +1,6 @@
-# VectorBridge Project Overview
+# VectorBridge 项目总览
 
-> Updated on 2026-06-10. VectorBridge is a local multimodal RAG system with document ingestion, hybrid retrieval, screenshot-based image retrieval, streaming trace visualization, and evaluation tooling.
+> 更新于 2026-06-10。VectorBridge 是一个本地多模态 RAG 系统，具备文档入库、混合检索、截图检索、流式可观测和评估工具链。
 
 ## 1. 项目定位
 
@@ -158,7 +158,7 @@ set "HF_ENDPOINT=https://hf-mirror.com" && .venv\Scripts\python.exe -m uvicorn b
 - 前端：http://127.0.0.1:8000/
 - OpenAPI：http://127.0.0.1:8000/docs
 
-### 5.4 GPU Acceleration
+### 5.4 GPU 加速
 
 `.env.example` 中 `EMBEDDING_DEVICE`、`MULTIMODAL_EMBEDDING_DEVICE`、`UBG_DEVICE` 默认为 `auto`。安装 CUDA 版 PyTorch 后会自动使用 GPU，否则回退 CPU。
 
@@ -231,7 +231,7 @@ node --check frontend\script.js
 - CDN 资源未本地化，离线演示可能需要提前处理。
 - 本地评估包含自动检索评估、LLM Judge 抽样和人工测试记录，但不代表生产环境指标。
 
-## 9. Documentation Notes
+## 9. 文档维护说明
 
 - 能用测试或代码路径确认的能力才写为“已完成”。
 - 可选模型、可选 OCR、可选 rerank 均写明依赖和降级行为。

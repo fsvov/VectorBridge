@@ -1,105 +1,103 @@
-# Evaluation and Limitations
+# 评估结果与边界
 
-> Updated on 2026-06-10. This document summarizes the current evaluation setup, results, and known limitations of VectorBridge.
+> 更新于 2026-06-10。本文档汇总 VectorBridge 的评估配置、结果及已知限制。
 
-## 1. Evaluation Scope
+## 1. 评估范围
 
-VectorBridge has been evaluated on text retrieval and answer quality tasks. Image retrieval is validated through manual screenshot tests and is not included in the automatic benchmark numbers below.
+VectorBridge 已在文本检索和回答质量上完成自动评估。图片检索通过人工截图测试验证，不包含在以下自动评估数据中。
 
-Current benchmark coverage:
+当前自动评估覆盖：
 
-| Dataset | Size | Usage |
+| 数据集 | 规模 | 用途 |
 | --- | ---: | --- |
-| CRUD_RAG | 2,394 QA samples | Chinese news retrieval QA |
-| RAGEval | 6,709 QA samples | Finance / law / medical retrieval QA |
+| CRUD_RAG | 2,394 条 | 中文新闻检索 QA |
+| RAGEval | 6,709 条 | 金融 / 法律 / 医疗检索 QA |
 
-Gold labels were rebuilt and deduplicated. RAGEval includes 271 unanswerable samples as negative cases. The current `gold_chunks_rageval_refined.json` has the same relevant chunk sets as the raw RAGEval gold file, so it should be treated as a cleaned gold file rather than a narrower semantic refinement.
+Gold 标注已重建并去重。RAGEval 包含 271 条无解样本作为负例。当前 `gold_chunks_rageval_refined.json` 与原始 RAGEval 的 relevant chunk 集合一致，应视为清洗后的 gold 而非语义收窄后的结果。
 
-## 2. Configuration
+## 2. 评估配置
 
-| Field | Value |
+| 字段 | 值 |
 | --- | --- |
-| Retrieval modes | dense / sparse / hybrid / ubg |
-| UBG mode | heuristic fallback, no trained weight dependency |
-| LLM Judge | `MODEL`, 100 samples per group |
-| Image retrieval | not included in automatic text benchmarks |
-| Evaluation date | 2026-06-10 |
-| Author hardware | RTX 4060 Laptop GPU, CUDA 12.8, torch 2.11.0+cu128 |
+| 检索模式 | dense / sparse / hybrid / ubg |
+| UBG 模式 | 启发式 fallback，无训练权重依赖 |
+| LLM Judge | `MODEL`，每组 100 条 |
+| 图片检索 | 不参与自动文本评估 |
+| 评估日期 | 2026-06-10 |
+| 评估硬件 | RTX 4060 Laptop GPU, CUDA 12.8, torch 2.11.0+cu128 |
 
-The hardware row describes the author's local evaluation environment only. The project can run on CPU; `.env.example` defaults embedding devices to `auto`.
+硬件行仅描述评估环境。项目可在 CPU 上运行，`.env.example` 中 embedding 设备默认为 `auto`。
 
-## 3. Retrieval Results
+## 3. 检索结果
 
 ### CRUD_RAG
 
-| Mode | recall@5 | recall@10 | mrr@5 | hit@5 | hit@10 |
+| 模式 | recall@5 | recall@10 | mrr@5 | hit@5 | hit@10 |
 | --- | ---: | ---: | ---: | ---: | ---: |
 | dense | **0.5726** | **0.7946** | **0.6010** | **0.9173** | 0.9716 |
 | hybrid | 0.5516 | 0.7786 | 0.5146 | 0.9048 | **0.9766** |
 | sparse | 0.5042 | 0.7297 | 0.4798 | 0.8630 | 0.9520 |
 | ubg | 0.5011 | 0.7291 | 0.4720 | 0.8601 | 0.9528 |
 
-On CRUD_RAG, dense retrieval performs best overall. The dataset has strong keyword and entity signals, and the heuristic UBG fallback is not the strongest choice for this setting.
+CRUD_RAG 上 dense 全维度最优。该数据集关键词和实体信号较强，启发式 UBG fallback 在此场景不占优。
 
 ### RAGEval
 
-| Mode | recall@5 | recall@10 | mrr@5 | hit@5 | hit@10 |
+| 模式 | recall@5 | recall@10 | mrr@5 | hit@5 | hit@10 |
 | --- | ---: | ---: | ---: | ---: | ---: |
 | ubg | **0.3110** | **0.4266** | 0.4960 | 0.7044 | **0.7773** |
 | dense | 0.2930 | 0.4113 | 0.6014 | **0.7207** | 0.7749 |
 | hybrid | 0.2805 | 0.3828 | **0.6155** | 0.7038 | 0.7606 |
 | sparse | 0.2347 | 0.3084 | 0.5395 | 0.6305 | 0.6979 |
 
-On RAGEval, UBG achieves the best recall@5 and recall@10, while hybrid has the best mrr@5. This suggests that path fusion improves coverage on harder synthetic documents, but ranking quality still depends on the final scoring strategy.
+RAGEval 上 UBG 取得最优 recall@5 和 recall@10，hybrid 取得最优 mrr@5。说明路径融合在较难的合成文档上改善了覆盖度，但排序精度仍取决于最终打分策略。
 
-## 4. Answer Quality
+## 4. 回答质量
 
-LLM Judge results on 100 samples per group:
+LLM Judge 每组 100 条结果：
 
-| Dataset | Faithfulness | Answer Relevancy | Context Precision | Context Recall |
+| 数据集 | Faithfulness | Answer Relevancy | Context Precision | Context Recall |
 | --- | ---: | ---: | ---: | ---: |
 | CRUD_RAG | **0.80** | 0.94 | 0.49 | **0.83** |
 | RAGEval Finance | 0.39 | 0.91 | 0.32 | 0.38 |
 | RAGEval Law | 0.26 | 0.94 | 0.33 | 0.30 |
 | RAGEval Medical | 0.39 | 0.92 | 0.33 | 0.42 |
 
-Interpretation:
+解读：
 
-- CRUD_RAG has usable answer grounding, with strong answer relevancy and context recall.
-- RAGEval remains harder: context recall is in the 0.30-0.42 range and context precision is low.
-- LLM Judge scores should be treated as approximate because the judge model can be biased toward model-generated answers.
+- CRUD_RAG 回答可被检索文档支撑，answer relevancy 和 context recall 较高。
+- RAGEval 仍较难：context recall 在 0.30-0.42 区间，context precision 普遍偏低。
+- LLM Judge 分数应视为近似值，Judge 模型评估自身生成结果存在评分偏宽松风险。
 
-## 5. Manual Validation
+## 5. 人工验证
 
-Manual testing covered:
+人工测试覆盖：
 
-- document upload, overwrite, deletion, and progress reporting;
-- single-turn text RAG;
-- short follow-up questions with topic completion;
-- screenshot retrieval with CLIP image embeddings and OCR fallback;
-- session deletion and trace display in the frontend.
+- 文档上传、覆盖、删除及进度展示；
+- 单轮文本 RAG；
+- 短追问的主题补全；
+- CLIP 图片 embedding + OCR fallback 截图检索；
+- 前端会话删除和 trace 展示。
 
-Observed behavior:
+观察结论：
 
-- Text QA is usable for demonstration on indexed documents.
-- Follow-up questions are more stable after query completion, but this is not a full long-term memory system.
-- Image retrieval is useful for screenshots of pages, charts, and text-heavy regions, but it is not general visual question answering.
-- Face identity recognition is not supported. Person screenshots are handled only as similar-image / nearby-document retrieval.
+- 文本 QA 在已入库文档上可稳定演示。
+- 追问补全后效果改善，但不是完整长期记忆系统。
+- 图片检索适合页面截图、图表和含文字区域的相似检索，不是通用视觉问答。
+- 不支持人脸识别。人物截图仅做相似图片/附近文档检索。
 
-## 6. Known Limitations
+## 6. 已知限制
 
-| Area | Limitation |
+| 领域 | 限制 |
 | --- | --- |
-| Image understanding | Screenshot retrieval is minimal viable functionality, not full VQA. |
-| Rerank | Reranker support is optional and not a stable default dependency. |
-| Security | No production-grade file scanning, PII governance, or document-level ACL. |
-| Multi-user production use | Basic user/session isolation exists, but the system has not been stress-tested. |
-| Conformal calibration | Runtime can use a calibration state file, but formal coverage reports are not shipped as a default artifact. |
-| Evaluation | Automatic benchmarks cover text retrieval; image retrieval is currently evaluated manually. |
+| 图片理解 | 截图检索是最小可用方案，非完整 VQA。 |
+| Rerank | 精排支持为可选，不是稳定默认依赖。 |
+| 安全 | 无生产级文件扫描、PII 治理、文档级权限隔离。 |
+| 多用户并发 | 具备基础用户/会话隔离，未做压力测试。 |
+| Conformal 校准 | 运行时可使用校准状态文件，未作为默认产物发布正式覆盖度报告。 |
+| 评估 | 自动评估覆盖文本检索；图片检索当前依赖人工测试。 |
 
-## 7. Reproducibility Notes
+## 7. 可复现性说明
 
-- Evaluation data and generated gold files are not committed by default.
-- `data/`, uploaded documents, model caches, and local reports are ignored by `.gitignore`.
-- To reproduce the automatic metrics, ingest the corresponding datasets and regenerate the gold files using scripts under `scripts/`.
-- Metrics may change if embedding models, LLM providers, retrieval thresholds, or gold generation logic are changed.
+- 复现自动评估需重新入库相应数据集，并使用 `scripts/` 下的脚本重新生成 gold 文件。
+- 更换 embedding 模型、LLM 提供商、检索阈值或 gold 生成逻辑会改变评估指标。
