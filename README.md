@@ -126,15 +126,15 @@ uv run uvicorn backend.app:app --host 0.0.0.0 --port 8000 --reload
 
 | 项目 | 地址 | 借鉴内容 |
 |------|------|---------|
-| Rag_System | https://github.com/CliffsCai/Rag_System | 多模态 RAG 架构参考：图片 base64 传输方案、三路混合检索、Milvus image_dense 字段设计、跨模态查询流程 |
-| SuperMew | https://github.com/icey1287/SuperMew | 原始纯文本 RAG 基础：LangGraph 检索管线、Hybrid Search + RRF、三级分块 + Auto-merging、SSE 流式输出，VectorBridge 的前身 |
+| [Rag_System](https://github.com/CliffsCai/Rag_System) | CliffsCai/Rag_System | 多模态 RAG 架构参考：图片 base64 传输方案、三路混合检索、Milvus image_dense 字段设计、跨模态查询流程 |
+| [SuperMew](https://github.com/icey1287/SuperMew) | icey1287/SuperMew | 原始纯文本 RAG 基础：LangGraph 检索管线、Hybrid Search + RRF、三级分块 + Auto-merging、SSE 流式输出，VectorBridge 的前身 |
 
 ### 评估数据集
 
 | 数据集 | 地址 | 规模 | 内容 |
 |------|------|------|------|
-| CRUD_RAG | https://github.com/IAAR-Shanghai/CRUD_RAG | 2,394 条 | 中文新闻 QA，单文档/双文档/三文档问答 |
-| RAGEval | https://github.com/OpenBMB/RAGEval | 6,709 条 | 金融/法律/医疗跨领域中英 QA，合成文档 + 真实标注 |
+| [CRUD_RAG](https://github.com/IAAR-Shanghai/CRUD_RAG) | IAAR-Shanghai/CRUD_RAG | 2,394 条 | 中文新闻 QA，单文档/双文档/三文档问答 |
+| [RAGEval](https://github.com/OpenBMB/RAGEval) | OpenBMB/RAGEval | 6,709 条 | 金融/法律/医疗跨领域中英 QA，合成文档 + 真实标注 |
 
 两个数据集合计 9,103 条 gold 标注样本，用于检索对比评估和 LLM Judge 质量评估。
 
